@@ -29,8 +29,7 @@ pipeline {
 				docker.build('$APP_IMAGE_NAME-$APP_HASH','-f./app/Dockerfile./afs-labs-student')
 				docker.withRegistry('https://$HARBOR_REGISTRY','harteaga-harbor-auth'){
 					sh'dockertag$APP_IMAGE_NAME-$APP_HASH$HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME:$APP_HASH-$PIPELINE_HASH'
-					sh'dockerpush$HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME:$APP_HASH-
-					$PIPELINE_HASH'
+					sh'dockerpush$HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME:$APP_HASH-$PIPELINE_HASH'
 				}
 			}
 		}
