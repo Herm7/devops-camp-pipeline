@@ -1,78 +1,50 @@
-pipeline {
-    agent {
-        label 'jenkins-agent'
-    }
-    environment {
-    	PIPELINE_HASH = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-    	HARBOR_REGISTRY = 'harbor.dev.afsmtddso.com'
-    	HARBOR_PROJECT = 'khaled-devsecops'   
-    	APP_IMAGE_NAME = 'app'
-    }
-    stages {
-        stage('Application repository') {
-            steps {
-                echo "Cloning application repository"
-                sh 'git clone https://github.com/khaledAFS/afs-labs-student.git'
-		dir('afs-labs-student') {
-		    script{
-		        env.APP_HASH = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
-		    }
-		}
+import requests, time, sys, json, getopt
 
-            }
-        }
-        stage('Application docker build') {
-            steps {
-                echo "Building application image"
-		withCredentials([usernameColonPassword(credentialsId: 'khaled-harbor-auth', variable: 'HARBOR-AUTH')]) {
-		    script {
-		        docker.build('$APP_IMAGE_NAME-$APP_HASH', '-f ./app/Dockerfile ./afs-labs-student')
-		        docker.withRegistry('https://$HARBOR_REGISTRY', 'khaled-harbor-auth') {
-		            sh 'docker tag $APP_IMAGE_NAME-$APP_HASH $HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME:$APP_HASH-$PIPELINE_HASH'
-		            sh 'docker push $HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME:$APP_HASH-$PIPELINE_HASH'
-		        }
-		    }
-		}
-            }
-	    post {
-	        always {
-	            echo "Clean local $APP_IMAGE_NAME image"
-	            script {
-	                try {
-	                    sh 'docker rmi $APP_IMAGE_NAME-$APP_HASH:latest'
-	                    sh 'docker rmi $HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME:$APP_HASH-$PIPELINE_HASH'
-	                } catch (err) {
-	                    echo err.getMessage()
-	                }
-	            }
-	        }
-	    }
-        }
-        stage('Security scanning') {
-            steps {
-	        withCredentials([usernamePassword(credentialsId: 'khaled-harbor-auth', usernameVariable: 'USERNAME', passwordVariable: 'PASSWORD')]) {
-		    echo "Scanning $APP_IMAGE_NAME image"
-		    sh 'python harbor_scanner.py -i $APP_IMAGE_NAME -r $HARBOR_REGISTRY -p $HARBOR_PROJECT -c ${USERNAME}:${PASSWORD}'
-                }
-            }
-        }
-        stage('Test'){
-            steps {
-                echo "Testing stage"
-            }
-        }
-        stage('Deploy') {
-            steps {
-                echo "Deployment stage"
-		sh 'kubectl -n khaled set image deployment/app-deployment app-deployment=$HARBOR_REGISTRY/$HARBOR_PROJECT/$APP_IMAGE_NAME:$APP_HASH-$PIPELINE_HASH'
-	    }
-        }
-    }
-    post {
-        cleanup {
-            echo "Clean workspace"
-		sh 'docker system prune -f'
-		sh 'rm -rf .git ./*'
-        }
-    }
-}
+## Arguments needed from user ##
+argList = sys.argv[1:]
+options = 'c:i:p:r:'
+
+arguments, values = getopt.getopt(argList, options)
+for currentArgument, currentValue in arguments:
+    if currentArgument in ("-c"):
+        username, password = currentValue.split(':')
+    elif currentArgument in ("-i"):
+        imageName = currentValue
+    elif currentArgument in ("-p"):
+        projectName = currentValue
+    elif currentArgument in ("-r"):
+        registry = currentValue
+
+## Grab sha256 digest from Harbor project repository ##
+urlArtifact = 'https://' + registry + '/api/v2.0/projects/' + projectName + '/repositories/' + imageName + '/artifacts/'
+digestResp = requests.get(urlArtifact, auth=(username, password))
+artifactReference = digestResp.json()[0]['digest']
+
+## Initialize image scanner ##
+urlScanInit = urlArtifact + artifactReference + '/scan'
+scanInitResp = requests.post(urlScanInit, data={}, auth=(username, password))
+if scanInitResp.status_code != 202:
+    print('Failed to scan image')
+    print('Server response code:', scanInitResp.status_code)
+    sys.exit(-1)
+
+## Checks scanner status ##
+urlScanOverview = urlArtifact + artifactReference + '?with_scan_overview=true'
+scanStatus = 'Pending'
+maxApiCall = 5
+
+while scanStatus != 'Success':
+    scanOverviewResp = requests.get(urlScanOverview, auth=(username, password))
+    scanOverviewResult = scanOverviewResp.json()['scan_overview']['application/vnd.scanner.adapter.vuln.report.harbor+json; version=1.0']
+    scanStatus = scanOverviewResult['scan_status']
+    print(scanStatus)
+    if scanStatus == 'Success':
+        break
+    elif maxApiCall <= 0:
+        print('Reached maximum API calls')
+        sys.exit(-1)
+    else:
+        maxApiCall -= 1
+        time.sleep(4)
+
+print(json.dumps(scanOverviewResult['summary'], indent=4))
