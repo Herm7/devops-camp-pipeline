@@ -43,8 +43,6 @@ pipeline {
 								}
 							}
 						}
-					}
-				}
 					post {
 						always {
 							echo "Clean local $DB_IMAGE_NAME image"
@@ -58,6 +56,7 @@ pipeline {
 							}
 						}
 					}
+				}
 				stage('Security scanning') {
 					steps {
 						// modify to scan database image
@@ -70,6 +69,7 @@ pipeline {
 					}
 				}
 			}
+		}
 	}
 	post {
 		cleanup {
